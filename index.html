@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendataan Peserta Olimpiade Bidang Akademik</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="inner">
+    <div class="logo">OSN</div>
+    <div>
+      <div class="t1" id="instansi">Dinas Pendidikan Kabupaten Deli Serdang</div>
+      <div class="t2">Pendataan Peserta Olimpiade Bidang Akademik</div>
+    </div>
+  </div>
+</header>
+
+<main id="app"><div class="loading"><div class="spin"></div>Memuat…</div></main>
+<footer class="site">Bidang Pembinaan SD · Dinas Pendidikan Kabupaten Deli Serdang</footer>
+
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { api, el, toast, modal, validate, inputFor, fmtWaktu } = U;
+  const app = document.getElementById('app');
+  document.getElementById('instansi').textContent = APP_CONFIG.INSTANSI || '';
+
+  const S = { kode: '', form: null, sekolah: [], jenjang: '', kec: '', npsn: '', identitas: {}, murid: [], prev: null };
+
+  function qs(k) { return new URLSearchParams(location.search).get(k) || ''; }
+
+  /* ---------- Layar kode ---------- */
+  function showKode(err) {
+    app.innerHTML = '';
+    const inp = el('input', { type: 'text', placeholder: 'Contoh: OSN2026', autocomplete: 'off', style: 'text-transform:uppercase;font-size:18px;letter-spacing:.08em', value: S.kode });
+    const go = async () => {
+      const k = inp.value.trim().toUpperCase();
+      if (!k) return inp.focus();
+      btn.disabled = true; btn.textContent = 'Memeriksa…';
+      try { await load(k); } catch (e) { btn.disabled = false; btn.textContent = 'Masuk'; showErr(e.message); }
+    };
+    const btn = el('button', { class: 'btn primary lg', onclick: go }, 'Masuk');
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    const errBox = el('div');
+    function showErr(m) { errBox.innerHTML = ''; errBox.appendChild(el('div', { class: 'notice bad' }, m)); }
+    app.appendChild(el('div', { class: 'narrow' },
+      el('div', { class: 'card' },
+        el('h2', null, 'Masukkan kode formulir'),
+        el('p', { class: 'lead' }, 'Kode formulir dibagikan oleh Dinas Pendidikan kepada Kepala Sekolah.'),
+        errBox,
+        el('label', { class: 'f' }, inp),
+        btn)));
+    if (err) showErr(err);
+    inp.focus();
+  }
+
+  async function load(kode) {
+    const d = await api('getForm', { kode });
+    S.kode = kode; S.form = d.form; S.sekolah = d.sekolah;
+    sessionStorage.setItem('osn_kode', kode);
+    const u = new URL(location.href); u.searchParams.set('kode', kode); history.replaceState(null, '', u);
+    S.jenjang = S.form.jenjang.length === 1 ? S.form.jenjang[0] : '';
+    S.kec = ''; S.npsn = ''; S.prev = null; S.identitas = {}; S.murid = [blankRow(), blankRow(), blankRow()];
+    render();
+  }
+
+  function blankRow() { const r = {}; S.form.schema.murid.forEach(q => r[q.id] = ''); return r; }
+
+  /* ---------- Formulir utama ---------- */
+  function render() {
+    const f = S.form;
+    app.innerHTML = '';
+    app.appendChild(el('div', { class: 'form-title' },
+      el('h1', null, f.judul),
+      f.deskripsi ? el('p', { class: 'lead' }, f.deskripsi) : null,
+      el('div', { class: 'meta' },
+        el('span', { class: 'badge ' + (f.terbuka ? 'ok' : 'bad') }, f.terbuka ? 'Formulir dibuka' : 'Formulir ditutup'),
+        el('span', { class: 'badge' }, 'Jenjang: ' + f.jenjang.join(', ')),
+        f.batas ? el('span', { class: 'badge gold' }, 'Batas: ' + fmtWaktu(f.batas.replace('T', ' ') + (f.batas.length <= 10 ? ' 23:59' : ''))) : null,
+        el('a', { href: '#', class: 'small', onclick: e => { e.preventDefault(); sessionStorage.removeItem('osn_kode'); history.replaceState(null, '', location.pathname); S.kode = ''; showKode(); } }, 'Ganti kode'))));
+    if (!f.terbuka) {
+      app.appendChild(el('div', { class: 'notice bad' }, 'Pengisian formulir ini sudah ditutup. Hubungi Dinas Pendidikan bila ada perubahan data.'));
+      return;
+    }
+    app.appendChild(identitasCard());
+    app.appendChild(el('div', { id: 'muridSlot' }));
+    renderMurid();
+  }
+
+  function identitasCard() {
+    const f = S.form;
+    const sys = {};
+    f.schema.identitas.forEach(q => sys[q.id] = q);
+    const jenjangSel = el('select', { id: 'f_jenjang' }, el('option', { value: '' }, '— pilih jenjang —'), f.jenjang.map(j => el('option', { value: j }, j)));
+    jenjangSel.value = S.jenjang;
+    if (f.jenjang.length === 1) jenjangSel.disabled = true;
+    const kecSel = el('select', { id: 'f_kec' });
+    const sekSel = el('select', { id: 'f_sekolah' });
+    const npsnInp = el('input', { id: 'f_npsn', readonly: true, placeholder: 'Terisi otomatis' });
+
+    function fillKec() {
+      const list = [...new Set(S.sekolah.filter(s => s[2] === S.jenjang).map(s => s[3]))].sort();
+      kecSel.innerHTML = '';
+      kecSel.appendChild(el('option', { value: '' }, S.jenjang ? '— pilih kecamatan —' : '— pilih jenjang dahulu —'));
+      list.forEach(k => kecSel.appendChild(el('option', { value: k }, k)));
+      kecSel.value = S.kec; kecSel.disabled = !S.jenjang;
+    }
+    function fillSek() {
+      const list = S.sekolah.filter(s => s[2] === S.jenjang && s[3] === S.kec).sort((a, b) => a[1].localeCompare(b[1]));
+      sekSel.innerHTML = '';
+      sekSel.appendChild(el('option', { value: '' }, S.kec ? '— pilih satuan pendidikan —' : '— pilih kecamatan dahulu —'));
+      list.forEach(s => sekSel.appendChild(el('option', { value: s[0] }, s[1] + '  (' + s[0] + ')')));
+      sekSel.value = S.npsn; sekSel.disabled = !S.kec;
+      npsnInp.value = S.npsn;
+    }
+    jenjangSel.addEventListener('change', () => { S.jenjang = jenjangSel.value; S.kec = ''; S.npsn = ''; S.prev = null; fillKec(); fillSek(); renderMurid(); });
+    kecSel.addEventListener('change', () => { S.kec = kecSel.value; S.npsn = ''; S.prev = null; fillSek(); renderMurid(); });
+    sekSel.addEventListener('change', async () => { S.npsn = sekSel.value; npsnInp.value = S.npsn; S.prev = null; renderMurid(); if (S.npsn) await cekKiriman(); });
+    fillKec(); fillSek();
+
+    const extra = f.schema.identitas.filter(q => q.type !== 'system').map(q =>
+      field(q, inputFor(q, S.identitas[q.id], S.jenjang, e => { S.identitas[q.id] = e.target.value; e.target.classList.remove('invalid'); })));
+
+    return el('section', { class: 'card' },
+      el('h2', null, el('span', { class: 'step' }, '1'), 'Identitas Satuan Pendidikan'),
+      el('div', { class: 'grid2' },
+        field(sys.jenjang, jenjangSel),
+        field(sys.kecamatan, kecSel),
+        field(sys.nama_sekolah, sekSel, 'Nama sekolah tidak ada? Hubungi Dinas Pendidikan.'),
+        field(sys.npsn, npsnInp)),
+      extra.length ? el('div', { class: 'grid2' }, extra) : null);
+  }
+
+  function field(q, input, hint) {
+    return el('label', { class: 'f' },
+      el('span', null, q.label, q.required ? el('span', { class: 'req' }, '*') : null),
+      input,
+      (hint || q.hint) ? el('small', null, hint || q.hint) : null);
+  }
+
+  async function cekKiriman() {
+    const slot = document.getElementById('muridSlot');
+    slot.innerHTML = '';
+    slot.appendChild(el('div', { class: 'loading' }, el('div', { class: 'spin' }), 'Memeriksa data sekolah…'));
+    try {
+      const d = await api('getSubmission', { kode: S.kode, npsn: S.npsn });
+      if (d.ada) {
+        S.prev = d;
+        S.form.schema.identitas.forEach(q => { if (q.type !== 'system') S.identitas[q.id] = d.identitas[q.id] || ''; });
+        S.murid = d.murid.map(m => Object.assign(blankRow(), m));
+        // segarkan isian identitas tambahan
+        document.querySelectorAll('section.card [data-qid]').forEach(n => { if (n.dataset.qid in S.identitas) n.value = S.identitas[n.dataset.qid]; });
+      } else {
+        S.prev = null;
+        if (!S.murid.some(rowFilled)) S.murid = [blankRow(), blankRow(), blankRow()];
+      }
+    } catch (e) { toast(e.message, 'bad'); }
+    renderMurid();
+  }
+
+  function rowFilled(r) { return S.form.schema.murid.some(q => String(r[q.id] || '').trim()); }
+
+  /* ---------- Tabel murid ---------- */
+  function renderMurid() {
+    const slot = document.getElementById('muridSlot');
+    if (!slot) return;
+    slot.innerHTML = '';
+    const cols = S.form.schema.murid;
+    const card = el('section', { class: 'card' }, el('h2', null, el('span', { class: 'step' }, '2'), 'Data Murid Peserta Olimpiade'));
+    if (!S.npsn) {
+      card.appendChild(el('p', { class: 'muted' }, 'Pilih satuan pendidikan terlebih dahulu.'));
+      slot.appendChild(card);
+      return;
+    }
+    if (S.prev) card.appendChild(el('div', { class: 'notice warn' },
+      el('strong', null, 'Sekolah ini sudah mengirim data '), `(${S.prev.murid.length} murid, ${fmtWaktu(S.prev.waktu)}). `,
+      'Data terakhir dimuat di bawah. Jika Anda mengirim ulang, data lama akan digantikan oleh data yang baru.'));
+    card.appendChild(el('p', { class: 'lead small' }, 'Satu baris untuk satu murid. Tambah baris bila peserta lebih banyak. Kolom bertanda * wajib diisi.'));
+
+    const tbody = el('tbody');
+    S.murid.forEach((r, i) => {
+      const tr = el('tr', null, el('td', { class: 'no' }, String(i + 1)));
+      cols.forEach(q => {
+        const inp = inputFor(q, r[q.id], S.jenjang, e => {
+          let v = e.target.value;
+          if (q.type === 'nisn') { v = v.replace(/\D/g, '').slice(0, 10); if (e.target.value !== v) e.target.value = v; }
+          r[q.id] = v; e.target.classList.remove('invalid');
+          const m = e.target.parentNode.querySelector('.err-msg'); if (m) m.remove();
+        });
+        tr.appendChild(el('td', { class: 'c-' + q.id }, inp));
+      });
+      tr.appendChild(el('td', { class: 'act' }, el('button', {
+        class: 'btn ghost icon', title: 'Hapus baris', 'aria-label': 'Hapus baris ' + (i + 1),
+        onclick: () => { S.murid.splice(i, 1); if (!S.murid.length) S.murid.push(blankRow()); renderMurid(); }
+      }, '✕')));
+      tbody.appendChild(tr);
+    });
+    card.appendChild(el('div', { class: 'tbl-wrap' },
+      el('table', { class: 'data entry' },
+        el('thead', null, el('tr', null, el('th', null, 'No'), cols.map(q => el('th', null, q.label, q.required ? ' *' : '')), el('th', null, ''))),
+        tbody)));
+    card.appendChild(el('div', { class: 'row', style: 'margin-top:12px' },
+      el('button', { class: 'btn', onclick: () => { S.murid.push(blankRow()); renderMurid(); const ins = slot.querySelectorAll('tbody tr:last-child input, tbody tr:last-child select'); if (ins[0]) ins[0].focus(); } }, '+ Tambah baris'),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'muted small' }, S.murid.filter(rowFilled).length + ' murid terisi'),
+      el('button', { class: 'btn primary lg', id: 'btnKirim', onclick: kirim }, S.prev ? 'Kirim Ulang (Ganti Data)' : 'Kirim Data')));
+    slot.appendChild(card);
+  }
+
+  function markErr(node, msg) {
+    node.classList.add('invalid');
+    if (node.closest('td') && !node.parentNode.querySelector('.err-msg')) node.parentNode.appendChild(el('div', { class: 'err-msg' }, msg));
+  }
+
+  async function kirim() {
+    const f = S.form;
+    let errs = 0, first = null;
+    document.querySelectorAll('.err-msg').forEach(n => n.remove());
+    // identitas tambahan
+    f.schema.identitas.filter(q => q.type !== 'system').forEach(q => {
+      const m = validate(q, S.identitas[q.id], S.jenjang);
+      if (m) { errs++; const n = document.querySelector(`section.card [data-qid="${q.id}"]`); if (n) { n.classList.add('invalid'); first = first || n; } }
+    });
+    const rows = S.murid.map((r, i) => ({ r, i })).filter(x => rowFilled(x.r));
+    if (!rows.length) { toast('Isi minimal satu murid.', 'bad'); return; }
+    const trs = document.querySelectorAll('#muridSlot tbody tr');
+    const nisnSeen = {};
+    rows.forEach(({ r, i }) => {
+      f.schema.murid.forEach(q => {
+        let m = validate(q, r[q.id], S.jenjang);
+        if (!m && q.type === 'nisn' && r[q.id]) { if (nisnSeen[r[q.id]]) m = 'NISN ganda'; nisnSeen[r[q.id]] = 1; }
+        if (m) { errs++; const n = trs[i].querySelector(`[data-qid="${q.id}"]`); markErr(n, m); first = first || n; }
+      });
+    });
+    if (errs) { toast(`Ada ${errs} isian yang perlu diperbaiki.`, 'bad'); if (first) first.focus(); return; }
+
+    const sek = S.sekolah.find(s => s[0] === S.npsn);
+    const ok = await modal({
+      title: S.prev ? 'Kirim ulang dan ganti data?' : 'Kirim data?',
+      body: el('div', null,
+        el('p', null, el('strong', null, sek[1]), el('br'), `NPSN ${sek[0]} · Kec. ${sek[3]}`),
+        el('p', null, `${rows.length} murid akan dikirim.`),
+        S.prev ? el('div', { class: 'notice warn' }, `Data sebelumnya (${S.prev.murid.length} murid) akan digantikan.`) : null),
+      okText: 'Ya, kirim'
+    });
+    if (!ok) return;
+    const btn = document.getElementById('btnKirim');
+    btn.disabled = true; btn.textContent = 'Mengirim…';
+    try {
+      const murid = rows.map(x => x.r);
+      const res = await api('submit', { kode: S.kode, npsn: S.npsn, identitas: S.identitas, murid });
+      sukses(res, murid);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = S.prev ? 'Kirim Ulang (Ganti Data)' : 'Kirim Data';
+      modal({ title: 'Gagal mengirim', body: e.message, okText: 'Tutup', cancelText: null });
+    }
+  }
+
+  function sukses(res, murid) {
+    const cols = S.form.schema.murid;
+    app.innerHTML = '';
+    app.appendChild(el('div', { class: 'card success' },
+      el('div', { class: 'check' }, '✓'),
+      el('h2', null, 'Data berhasil dikirim'),
+      el('p', { class: 'lead' }, `${res.sekolah} — ${res.jumlah} murid`),
+      el('p', { class: 'muted small' }, `Diterima ${fmtWaktu(res.waktu)} · No. kiriman ${res.idKiriman}`),
+      el('p', { class: 'muted small' }, 'Perlu perbaikan? Isi ulang formulir untuk sekolah yang sama; data terakhir yang dipakai.')));
+    app.appendChild(el('div', { class: 'card' },
+      el('h2', null, 'Ringkasan kiriman'),
+      el('div', { class: 'tbl-wrap' }, el('table', { class: 'data' },
+        el('thead', null, el('tr', null, el('th', null, 'No'), cols.map(q => el('th', null, q.label)))),
+        el('tbody', null, murid.map((m, i) => el('tr', null, el('td', null, String(i + 1)), cols.map(q => el('td', null, m[q.id] || '')))))) ),
+      el('div', { class: 'row end no-print', style: 'margin-top:14px' },
+        el('button', { class: 'btn', onclick: () => print() }, 'Cetak bukti'),
+        el('button', { class: 'btn primary', onclick: () => load(S.kode).catch(e => toast(e.message, 'bad')) }, 'Isi / ubah lagi'))));
+    scrollTo(0, 0);
+  }
+
+  /* ---------- Mulai ---------- */
+  const awal = (qs('kode') || sessionStorage.getItem('osn_kode') || '').toUpperCase();
+  if (awal) { S.kode = awal; load(awal).catch(e => showKode(e.message)); }
+  else showKode();
+})();
+</script>
+</body>
+</html>
